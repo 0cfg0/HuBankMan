@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bankhuman"
+version = "0.1.0"
+description = "A local personal-finance registry for bank accounts and investments."
+requires-python = ">=3.9"
+readme = "README.md"
+
+[project.scripts]
+bankhuman = "bankhuman.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["bankhuman*"]
