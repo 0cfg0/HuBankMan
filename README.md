@@ -20,6 +20,20 @@ pip install -e .
 bankhuman
 ```
 
+The modern browser interface is available as a separate command:
+
+```powershell
+hubankman
+```
+
+It opens a local Streamlit app with management, current-state charts, and
+historical evolution views. To use another SQLite file, pass its path to the
+UI launcher:
+
+```powershell
+hubankman --database path\to\money.db
+```
+
 If the environment is based on an older Anaconda Python, use `python -m pip`
 instead of invoking `pip` directly. This avoids a stale `pip.exe` launcher:
 
@@ -51,6 +65,9 @@ for liabilities.
 
 Run `bankhuman --help` for command-line options. The menu supports adding and
 listing products and registries, and showing a current summary by product type.
+
+The `hubankman` interface includes the same product and registry operations,
+Excel import, and Plotly charts based on the stored registry history.
 
 Run the test suite with:
 

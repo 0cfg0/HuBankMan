@@ -139,17 +139,16 @@ class Database:
             cursor = db.execute("DELETE FROM products WHERE id = ?", (product_id,))
             return cursor.rowcount > 0
 
-    def list_registries(self, limit: int = 100) -> list[tuple[Registry, Product]]:
+    def list_registries(self, limit: int | None = 100) -> list[tuple[Registry, Product]]:
         with self.connect() as db:
-            rows = db.execute(
-                """SELECT r.*, p.name AS product_name, p.product_type, p.currency,
-                          p.institution, p.labels_json AS product_labels_json,
-                          p.metadata_json AS product_metadata_json, p.iban AS product_iban,
-                          p.isin AS product_isin, p.owner AS product_owner,
-                          p.created_at AS product_created_at
-                   FROM registries r JOIN products p ON p.id = r.product_id
-                   ORDER BY r.recorded_on DESC, r.id DESC LIMIT ?""", (limit,)
-            ).fetchall()
+            query = """SELECT r.*, p.name AS product_name, p.product_type, p.currency,
+                              p.institution, p.labels_json AS product_labels_json,
+                              p.metadata_json AS product_metadata_json, p.iban AS product_iban,
+                              p.isin AS product_isin, p.owner AS product_owner,
+                              p.created_at AS product_created_at
+                       FROM registries r JOIN products p ON p.id = r.product_id
+                       ORDER BY r.recorded_on DESC, r.id DESC"""
+            rows = db.execute(query if limit is None else query + " LIMIT ?", () if limit is None else (limit,)).fetchall()
         return [(_registry_from_row(row), _product_from_joined_row(row)) for row in rows]
 
     def latest_registries(self) -> list[tuple[Registry, Product]]:
