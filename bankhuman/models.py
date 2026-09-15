@@ -43,6 +43,7 @@ class Product:
     metadata: dict[str, Any] = field(default_factory=dict)
     iban: str | None = None
     isin: str | None = None
+    owner: str = "yo"
     id: int | None = None
 
     def __post_init__(self) -> None:
@@ -50,6 +51,7 @@ class Product:
             raise ValueError("A product needs a name.")
         if len(self.currency) != 3 or not self.currency.isalpha():
             raise ValueError("Currency must be a three-letter ISO code.")
+        object.__setattr__(self, "owner", self.owner.strip() or "yo")
         object.__setattr__(self, "iban", _normalize_identifier(self.iban))
         object.__setattr__(self, "isin", _normalize_identifier(self.isin))
 

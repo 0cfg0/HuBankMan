@@ -14,13 +14,21 @@ import pandas as pd
 from .models import Product, ProductType, Registry
 
 
+class _Connection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, factory=_Connection)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
@@ -39,6 +47,7 @@ class Database:
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     iban TEXT,
                     isin TEXT,
+                    owner TEXT NOT NULL DEFAULT 'yo',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS registries (
@@ -56,21 +65,39 @@ class Database:
                 """
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(products)").fetchall()}
-            for column_name in ("iban", "isin"):
+            for column_name in ("iban", "isin", "owner"):
                 if column_name not in columns:
-                    db.execute(f"ALTER TABLE products ADD COLUMN {column_name} TEXT")
+                    definition = "TEXT NOT NULL DEFAULT 'yo'" if column_name == "owner" else "TEXT"
+                    db.execute(f"ALTER TABLE products ADD COLUMN {column_name} {definition}")
 
     def add_product(self, product: Product) -> Product:
         with self.connect() as db:
             cursor = db.execute(
                 """INSERT INTO products
-                   (name, product_type, currency, institution, labels_json, metadata_json, iban, isin)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (name, product_type, currency, institution, labels_json, metadata_json, iban, isin, owner)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (product.name.strip(), product.product_type.value, product.currency.upper(),
                  product.institution, _dump(product.labels), _dump(product.metadata),
-                 product.iban, product.isin),
+                 product.iban, product.isin, product.owner),
             )
             return replace(product, id=cursor.lastrowid)
+
+    def update_product(self, product: Product) -> Product:
+        if product.id is None:
+            raise ValueError("A product must be saved before it can be updated.")
+        with self.connect() as db:
+            cursor = db.execute(
+                """UPDATE products
+                   SET name = ?, product_type = ?, currency = ?, institution = ?,
+                       labels_json = ?, metadata_json = ?, iban = ?, isin = ?, owner = ?
+                   WHERE id = ?""",
+                (product.name.strip(), product.product_type.value, product.currency.upper(),
+                 product.institution, _dump(product.labels), _dump(product.metadata),
+                 product.iban, product.isin, product.owner, product.id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Product #{product.id} does not exist.")
+        return replace(product, id=product.id)
 
     def find_product_by_identifier(self, identifier: str | None) -> Product | None:
         normalized = _normalize_identifier(identifier)
@@ -117,7 +144,9 @@ class Database:
             rows = db.execute(
                 """SELECT r.*, p.name AS product_name, p.product_type, p.currency,
                           p.institution, p.labels_json AS product_labels_json,
-                          p.metadata_json AS product_metadata_json, p.created_at AS product_created_at
+                          p.metadata_json AS product_metadata_json, p.iban AS product_iban,
+                          p.isin AS product_isin, p.owner AS product_owner,
+                          p.created_at AS product_created_at
                    FROM registries r JOIN products p ON p.id = r.product_id
                    ORDER BY r.recorded_on DESC, r.id DESC LIMIT ?""", (limit,)
             ).fetchall()
@@ -129,7 +158,9 @@ class Database:
             rows = db.execute(
                 """SELECT r.*, p.name AS product_name, p.product_type, p.currency,
                           p.institution, p.labels_json AS product_labels_json,
-                          p.metadata_json AS product_metadata_json, p.created_at AS product_created_at
+                          p.metadata_json AS product_metadata_json, p.iban AS product_iban,
+                          p.isin AS product_isin, p.owner AS product_owner,
+                          p.created_at AS product_created_at
                    FROM registries r JOIN products p ON p.id = r.product_id
                    WHERE r.id = (SELECT r2.id FROM registries r2
                                  WHERE r2.product_id = p.id
@@ -140,6 +171,9 @@ class Database:
 
     def import_excel(self, path: str | Path) -> int:
         dataframe = pd.read_excel(path)
+        normalized_columns = {str(column).strip().lower() for column in dataframe.columns}
+        if "name" not in normalized_columns and "alias" not in normalized_columns:
+            return self._import_position_global(path)
         created_products = 0
         for row in dataframe.to_dict(orient="records"):
             name = str(row.get("name") or row.get("product") or row.get("product_name") or "").strip()
@@ -178,6 +212,92 @@ class Database:
             self.add_registry(Registry(product.id, amount, recorded_on, metadata=metadata))
         return created_products
 
+    def _import_position_global(self, path: str | Path) -> int:
+        created_products = 0
+        section = None
+        frame = pd.read_excel(path, header=None)
+        rows = [
+            [str(value).strip() if pd.notna(value) else "" for value in row]
+            for row in frame.itertuples(index=False, name=None)
+        ]
+        for row_index, values in enumerate(rows):
+            first_value = values[0].lower() if values else ""
+            if first_value.startswith("cuentas"):
+                section = "bank_account"
+            elif first_value.startswith("fondos") or first_value.startswith("ahorro e inversión"):
+                section = "fund"
+            elif first_value.startswith("depósitos"):
+                section = "deposit"
+            elif first_value.startswith("valores"):
+                section = "investment"
+            elif first_value.startswith("tajetas") or first_value.startswith("tarjetas"):
+                section = "credit_card"
+            elif first_value.startswith("financiacion"):
+                section = "loan"
+            elif first_value.startswith("seguros"):
+                section = "insurance"
+            elif first_value.startswith("patrimonio inmobiliario"):
+                section = "property"
+
+            lowered_values = {value.lower() for value in values}
+            if not section or not ({"alias", "nombre vivienda"} & lowered_values):
+                continue
+
+            headers = [value.lower() for value in values]
+            for data_values in rows[row_index + 1:]:
+                if not any(data_values):
+                    break
+                if data_values[0].lower() in {"alias", "fondos", "depósitos", "valores", "hipotecas y préstamos"}:
+                    break
+                record = dict(zip(headers, data_values))
+                amount_value = (
+                    record.get("disponible")
+                    or record.get("valoración")
+                    or record.get("dispuesto")
+                    or record.get("pendiente")
+                )
+                if not amount_value or amount_value in {"-", "'-"}:
+                    continue
+                amount = _parse_amount(amount_value)
+                currency = record.get("divisa") or "EUR"
+                isin = _normalize_identifier(record.get("isin"))
+                institution = record.get("banco") or None
+                alias = record.get("alias") or record.get("nombre vivienda") or "Imported position"
+                iban = _normalize_identifier(record.get("iban"))
+                if section == "bank_account" and len(alias) > 15 and alias[:2].isalpha():
+                    iban = _normalize_identifier(alias)
+                    name = f"{institution or 'Bank account'} ({iban[-4:]})"
+                else:
+                    name = alias
+                existing = self.find_product_by_identifier(iban or isin)
+                if existing is None:
+                    for product in self.list_products():
+                        if product.name.casefold() == name.casefold() and product.institution == institution:
+                            existing = product
+                            break
+                if existing is None:
+                    product = self.add_product(Product(
+                        name=name,
+                        product_type={
+                            "bank_account": ProductType.BANK_ACCOUNT,
+                            "fund": ProductType.FUND,
+                            "investment": ProductType.INVESTMENT,
+                            "credit_card": ProductType.CREDIT_CARD,
+                            "loan": ProductType.LOAN,
+                            "property": ProductType.OTHER,
+                        }.get(section, ProductType.OTHER),
+                        currency=currency,
+                        institution=institution,
+                        iban=iban,
+                        isin=isin,
+                        metadata={"import_section": section, "source_alias": alias},
+                    ))
+                    created_products += 1
+                else:
+                    product = existing
+                self.add_registry(Registry(product.id, amount, date.today(), metadata={"source": Path(path).name}))
+        return created_products
+
 
 def _normalize_identifier(value: object) -> str | None:
     if value is None:
@@ -210,6 +330,13 @@ def _parse_date(value: object) -> date:
     return date.fromisoformat(str(value).split(" ")[0])
 
 
+def _parse_amount(value: object) -> Decimal:
+    normalized = str(value).strip().replace("'", "").replace(" ", "")
+    if "," in normalized:
+        normalized = normalized.replace(".", "").replace(",", ".")
+    return Decimal(normalized)
+
+
 def _dump(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
@@ -218,13 +345,14 @@ def _product_from_row(row: sqlite3.Row) -> Product:
     return Product(id=row["id"], name=row["name"], product_type=ProductType(row["product_type"]),
                    currency=row["currency"], institution=row["institution"],
                    labels=tuple(json.loads(row["labels_json"])), metadata=json.loads(row["metadata_json"]),
-                   iban=row["iban"], isin=row["isin"])
+                   iban=row["iban"], isin=row["isin"], owner=row["owner"])
 
 
 def _product_from_joined_row(row: sqlite3.Row) -> Product:
     return Product(id=row["product_id"], name=row["product_name"], product_type=ProductType(row["product_type"]),
                    currency=row["currency"], institution=row["institution"],
-                   labels=tuple(json.loads(row["product_labels_json"])), metadata=json.loads(row["product_metadata_json"]))
+                   labels=tuple(json.loads(row["product_labels_json"])), metadata=json.loads(row["product_metadata_json"]),
+                   iban=row["product_iban"], isin=row["product_isin"], owner=row["product_owner"])
 
 
 def _registry_from_row(row: sqlite3.Row) -> Registry:

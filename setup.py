@@ -10,6 +10,7 @@ setup(
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     python_requires=">=3.9",
+    install_requires=["pandas>=2.0", "openpyxl>=3.1", "xlrd>=2.0"],
     packages=find_packages(include=["bankhuman", "bankhuman.*"]),
     entry_points={"console_scripts": ["bankhuman=bankhuman.cli:main"]},
 )

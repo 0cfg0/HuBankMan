@@ -31,6 +31,7 @@ def run_menu(database: Database) -> None:
         "6": ("Delete a registry", lambda: delete_registry_prompt(database)),
         "7": ("Delete a product", lambda: delete_product_prompt(database)),
         "8": ("Import from Excel", lambda: import_excel_prompt(database)),
+        "9": ("Edit a product", lambda: edit_product_prompt(database)),
     }
     while True:
         print("\nBankHuMan")
@@ -160,6 +161,46 @@ def delete_product_prompt(database: Database) -> None:
     raise ValueError("That product ID does not exist.")
 
 
+def edit_product_prompt(database: Database) -> None:
+    products = database.list_products()
+    if not products:
+        print("No products yet.")
+        return
+    print("\nProducts")
+    for product in products:
+        print(f"  {product.id}. {product.name} ({product.product_type.value}, {product.currency})")
+    product_id = int(_required("Product ID"))
+    product = next((item for item in products if item.id == product_id), None)
+    if product is None:
+        raise ValueError("That product ID does not exist.")
+
+    print("Press Enter to keep the current value.")
+    name = input(f"Name [{product.name}]: ").strip() or product.name
+    raw_type = input(f"Type [{product.product_type.value}]: ").strip().lower()
+    product_type = ProductType(raw_type or product.product_type.value)
+    currency = input(f"Currency [{product.currency}]: ").strip().upper() or product.currency
+    institution = input(f"Institution [{product.institution or ''}]: ").strip() or product.institution
+    labels = _labels(input(f"Labels (comma-separated) [{', '.join(product.labels)}]: ")) or product.labels
+    metadata = _metadata_with_default(product.metadata)
+    iban = input(f"IBAN [{product.iban or ''}]: ").strip() or product.iban
+    isin = input(f"ISIN [{product.isin or ''}]: ").strip() or product.isin
+    owner = input(f"Owner [{product.owner}]: ").strip() or product.owner
+
+    updated = database.update_product(Product(
+        id=product.id,
+        name=name,
+        product_type=product_type,
+        currency=currency,
+        institution=institution,
+        labels=labels,
+        metadata=metadata,
+        iban=iban,
+        isin=isin,
+        owner=owner,
+    ))
+    print(f"Updated product #{updated.id}: {updated.name}")
+
+
 def import_excel_prompt(database: Database) -> None:
     path = Path(input("Excel file path: ").strip())
     created = database.import_excel(path)
@@ -185,6 +226,16 @@ def _metadata() -> dict[str, object]:
     raw = input("Metadata as JSON (optional): ").strip()
     if not raw:
         return {}
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("Metadata must be a JSON object, e.g. {\"ticker\": \"VWCE\"}.")
+    return value
+
+
+def _metadata_with_default(current: dict[str, object]) -> dict[str, object]:
+    raw = input(f"Metadata as JSON [{json.dumps(current, sort_keys=True)}]: ").strip()
+    if not raw:
+        return current
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("Metadata must be a JSON object, e.g. {\"ticker\": \"VWCE\"}.")

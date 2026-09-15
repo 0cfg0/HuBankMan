@@ -8,6 +8,12 @@ version = "0.1.0"
 description = "A local personal-finance registry for bank accounts and investments."
 requires-python = ">=3.9"
 readme = "README.md"
+dependencies = [
+	"pandas>=2.0",
+	"plotly>=5.0",
+	"openpyxl>=3.1",
+	"xlrd>=2.0",
+]
 
 [project.scripts]
 bankhuman = "bankhuman.cli:main"

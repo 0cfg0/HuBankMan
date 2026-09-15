@@ -62,10 +62,36 @@ class DatabaseTests(unittest.TestCase):
             ProductType.INVESTMENT,
             iban="ES9121000418450200051332",
             isin="US0378331005",
+            owner="Comun",
         ))
 
         self.assertEqual(self.database.find_product_by_identifier("ES9121000418450200051332"), product)
         self.assertEqual(self.database.find_product_by_identifier("US0378331005"), product)
+        self.assertEqual(self.database.list_products()[0].owner, "Comun")
+
+    def test_updates_product_without_removing_registry_history(self):
+        product = self.database.add_product(Product("Broker", ProductType.INVESTMENT))
+        registry = self.database.add_registry(Registry(
+            product.id, Decimal("250.00"), date(2026, 4, 1)))
+
+        updated = self.database.update_product(Product(
+            id=product.id,
+            name="Updated broker",
+            product_type=ProductType.FUND,
+            currency="USD",
+            institution="New bank",
+            labels=("long-term",),
+            metadata={"ticker": "VWCE"},
+            isin="IE00BK5BQT80",
+            owner="Comun",
+        ))
+
+        self.assertEqual(self.database.list_products(), [updated])
+        self.assertEqual(self.database.list_registries(), [(registry, updated)])
+
+    def test_update_product_requires_existing_id(self):
+        with self.assertRaises(ValueError):
+            self.database.update_product(Product("Unsaved", ProductType.OTHER))
 
     def test_import_excel_creates_missing_products_and_registries(self):
         file_path = Path(self.temp_dir.name) / "positions.xlsx"
